@@ -12,8 +12,9 @@ const builtInSymbols = new Set(
 )
 
 function createGetter(isReadonly: boolean) {
-  return function get(target: any, key: string | symbol, receiver: any) {
-    const res = Reflect.get(target, key, receiver)
+  return function get(target: any, key: string | symbol) {
+    // not using Reflect.get here for perf reasons
+    const res = target[key]
     if (isSymbol(key) && builtInSymbols.has(key)) {
       return res
     }
@@ -38,12 +39,12 @@ function set(
   receiver: any
 ): boolean {
   value = toRaw(value)
-  const hadKey = hasOwn(target, key)
   const oldValue = target[key]
   if (isRef(oldValue) && !isRef(value)) {
     oldValue.value = value
     return true
   }
+  const hadKey = hasOwn(target, key)
   const result = Reflect.set(target, key, value, receiver)
   // don't trigger if target is something up in the prototype chain of original
   if (target === toRaw(receiver)) {
