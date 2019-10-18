@@ -12,7 +12,7 @@ import {
   callWithErrorHandling,
   callWithAsyncErrorHandling
 } from './errorHandling'
-import { AppContext, createAppContext } from './apiApp'
+import { AppContext, createAppContext, AppConfig } from './apiApp'
 import { Directive } from './directives'
 import { applyOptions, ComponentOptions } from './apiOptions'
 import {
@@ -21,10 +21,17 @@ import {
   capitalize,
   NOOP,
   isArray,
-  isObject
+  isObject,
+  NO,
+  makeMap,
+  isPromise
 } from '@vue/shared'
 import { SuspenseBoundary } from './suspense'
-import { CompilerOptions } from '@vue/compiler-dom'
+import {
+  CompilerError,
+  CompilerOptions,
+  generateCodeFrame
+} from '@vue/compiler-dom'
 
 export type Data = { [key: string]: unknown }
 
@@ -76,6 +83,7 @@ export interface ComponentInternalInstance {
   render: RenderFunction | null
   effects: ReactiveEffect[] | null
   provides: Data
+  accessCache: Data
 
   components: Record<string, Component>
   directives: Record<string, Directive>
@@ -140,6 +148,7 @@ export function createComponentInstance(
     setupContext: null,
     effects: null,
     provides: parent ? parent.provides : Object.create(appContext.provides),
+    accessCache: null!,
 
     // setup context properties
     renderContext: EMPTY_OBJ,
@@ -219,11 +228,37 @@ export const setCurrentInstance = (
   currentInstance = instance
 }
 
+const isBuiltInTag = /*#__PURE__*/ makeMap('slot,component')
+
+export function validateComponentName(name: string, config: AppConfig) {
+  const appIsNativeTag = config.isNativeTag || NO
+  if (isBuiltInTag(name) || appIsNativeTag(name)) {
+    warn(
+      'Do not use built-in or reserved HTML elements as component id: ' + name
+    )
+  }
+}
+
 export function setupStatefulComponent(
   instance: ComponentInternalInstance,
   parentSuspense: SuspenseBoundary | null
 ) {
   const Component = instance.type as ComponentOptions
+
+  if (__DEV__) {
+    if (Component.name) {
+      validateComponentName(Component.name, instance.appContext.config)
+    }
+    if (Component.components) {
+      const names = Object.keys(Component.components)
+      for (let i = 0; i < names.length; i++) {
+        const name = names[i]
+        validateComponentName(name, instance.appContext.config)
+      }
+    }
+  }
+  // 0. create render proxy property access cache
+  instance.accessCache = {}
   // 1. create render proxy
   instance.renderProxy = new Proxy(instance, PublicInstanceProxyHandlers)
   // 2. create props proxy
@@ -247,11 +282,7 @@ export function setupStatefulComponent(
     currentInstance = null
     currentSuspense = null
 
-    if (
-      setupResult &&
-      isFunction(setupResult.then) &&
-      isFunction(setupResult.catch)
-    ) {
+    if (isPromise(setupResult)) {
       if (__FEATURE_SUSPENSE__) {
         // async setup returned Promise.
         // bail here and wait for re-entry.
@@ -316,29 +347,40 @@ function finishComponentSetup(
 ) {
   const Component = instance.type as ComponentOptions
   if (!instance.render) {
-    if (Component.template && !Component.render) {
-      if (compile) {
-        Component.render = compile(Component.template, {
-          onError(err) {
-            if (__DEV__) {
-              // TODO use err.loc to provide codeframe like Vue 2
-              warn(`Template compilation error: ${err.message}`)
-            }
+    if (__RUNTIME_COMPILE__ && Component.template && !Component.render) {
+      // __RUNTIME_COMPILE__ ensures `compile` is provided
+      Component.render = compile!(Component.template, {
+        isCustomElement: instance.appContext.config.isCustomElement || NO,
+        onError(err: CompilerError) {
+          if (__DEV__) {
+            const message = `Template compilation error: ${err.message}`
+            const codeFrame =
+              err.loc &&
+              generateCodeFrame(
+                Component.template!,
+                err.loc.start.offset,
+                err.loc.end.offset
+              )
+            warn(codeFrame ? `${message}\n${codeFrame}` : message)
           }
-        })
-      } else if (__DEV__) {
+        }
+      })
+    }
+    if (__DEV__ && !Component.render) {
+      /* istanbul ignore if */
+      if (!__RUNTIME_COMPILE__ && Component.template) {
         warn(
           `Component provides template but the build of Vue you are running ` +
             `does not support on-the-fly template compilation. Either use the ` +
             `full build or pre-compile the template using Vue CLI.`
         )
+      } else {
+        warn(
+          `Component is missing${
+            __RUNTIME_COMPILE__ ? ` template or` : ``
+          } render function.`
+        )
       }
-    }
-    if (__DEV__ && !Component.render) {
-      warn(
-        `Component is missing render function. Either provide a template or ` +
-          `return a render function from setup().`
-      )
     }
     instance.render = (Component.render || NOOP) as RenderFunction
   }

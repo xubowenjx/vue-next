@@ -53,9 +53,9 @@ export function baseCompile(
             transformExpression
           ]
         : []),
-      trackSlotScopes,
       transformSlotOutlet,
       transformElement,
+      trackSlotScopes,
       optimizeText,
       ...(options.nodeTransforms || []) // user transforms
     ],
@@ -99,6 +99,7 @@ export {
 } from './errors'
 export * from './ast'
 export * from './utils'
+export * from './codeframe'
 export { registerRuntimeHelpers } from './runtimeHelpers'
 
 // expose transforms so higher-order compilers can import and extend them
