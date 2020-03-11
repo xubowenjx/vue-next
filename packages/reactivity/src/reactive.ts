@@ -1,19 +1,16 @@
-import { isObject, toTypeString } from '@vue/shared'
-import { mutableHandlers, readonlyHandlers } from './baseHandlers'
+import { isObject, toRawType } from '@vue/shared'
+import {
+  mutableHandlers,
+  readonlyHandlers,
+  shallowReadonlyHandlers,
+  shallowReactiveHandlers
+} from './baseHandlers'
 import {
   mutableCollectionHandlers,
   readonlyCollectionHandlers
 } from './collectionHandlers'
-import { ReactiveEffect } from './effect'
-import { UnwrapRef, Ref } from './ref'
-
-// The main WeakMap that stores {target -> key -> dep} connections.
-// Conceptually, it's easier to think of a dependency as a Dep class
-// which maintains a Set of subscribers, but we simply store them as
-// raw Sets to reduce memory overhead.
-export type Dep = Set<ReactiveEffect>
-export type KeyToDepMap = Map<string | symbol, Dep>
-export const targetMap = new WeakMap<any, KeyToDepMap>()
+import { UnwrapRef, Ref, isRef } from './ref'
+import { makeMap } from '@vue/shared'
 
 // WeakMaps that store {raw <-> observed} pairs.
 const rawToReactive = new WeakMap<any, any>()
@@ -27,13 +24,15 @@ const readonlyValues = new WeakSet<any>()
 const nonReactiveValues = new WeakSet<any>()
 
 const collectionTypes = new Set<Function>([Set, Map, WeakMap, WeakSet])
-const observableValueRE = /^\[object (?:Object|Array|Map|Set|WeakMap|WeakSet)\]$/
+const isObservableType = /*#__PURE__*/ makeMap(
+  'Object,Array,Map,Set,WeakMap,WeakSet'
+)
 
 const canObserve = (value: any): boolean => {
   return (
     !value._isVue &&
     !value._isVNode &&
-    observableValueRE.test(toTypeString(value)) &&
+    isObservableType(toRawType(value)) &&
     !nonReactiveValues.has(value)
   )
 }
@@ -50,6 +49,9 @@ export function reactive(target: object) {
   // target is explicitly marked as readonly by user
   if (readonlyValues.has(target)) {
     return readonly(target)
+  }
+  if (isRef(target)) {
+    return target
   }
   return createReactiveObject(
     target,
@@ -77,8 +79,37 @@ export function readonly<T extends object>(
   )
 }
 
+// Return a reactive-copy of the original object, where only the root level
+// properties are readonly, and does NOT unwrap refs nor recursively convert
+// returned properties.
+// This is used for creating the props proxy object for stateful components.
+export function shallowReadonly<T extends object>(
+  target: T
+): Readonly<{ [K in keyof T]: UnwrapNestedRefs<T[K]> }> {
+  return createReactiveObject(
+    target,
+    rawToReadonly,
+    readonlyToRaw,
+    shallowReadonlyHandlers,
+    readonlyCollectionHandlers
+  )
+}
+
+// Return a reactive-copy of the original object, where only the root level
+// properties are reactive, and does NOT unwrap refs nor recursively convert
+// returned properties.
+export function shallowReactive<T extends object>(target: T): T {
+  return createReactiveObject(
+    target,
+    rawToReactive,
+    reactiveToRaw,
+    shallowReactiveHandlers,
+    mutableCollectionHandlers
+  )
+}
+
 function createReactiveObject(
-  target: any,
+  target: unknown,
   toProxy: WeakMap<any, any>,
   toRaw: WeakMap<any, any>,
   baseHandlers: ProxyHandler<any>,
@@ -109,17 +140,14 @@ function createReactiveObject(
   observed = new Proxy(target, handlers)
   toProxy.set(target, observed)
   toRaw.set(observed, target)
-  if (!targetMap.has(target)) {
-    targetMap.set(target, new Map())
-  }
   return observed
 }
 
-export function isReactive(value: any): boolean {
+export function isReactive(value: unknown): boolean {
   return reactiveToRaw.has(value) || readonlyToRaw.has(value)
 }
 
-export function isReadonly(value: any): boolean {
+export function isReadonly(value: unknown): boolean {
   return readonlyToRaw.has(value)
 }
 

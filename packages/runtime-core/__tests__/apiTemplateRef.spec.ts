@@ -1,4 +1,12 @@
-import { ref, nodeOps, h, render, nextTick, Ref } from '@vue/runtime-test'
+import {
+  ref,
+  nodeOps,
+  h,
+  render,
+  nextTick,
+  Ref,
+  defineComponent
+} from '@vue/runtime-test'
 
 // reference: https://vue-composition-api-rfc.netlify.com/api.html#template-refs
 
@@ -14,7 +22,9 @@ describe('api: template refs', () => {
         }
       },
       render() {
-        return h('div', { ref: 'refKey' })
+        // Note: string refs are compiled into [ctx, key] tuples by the compiler
+        // to ensure correct context.
+        return h('div', { ref: [this, 'refKey'] as any })
       }
     }
     render(h(Comp), root)
@@ -35,7 +45,7 @@ describe('api: template refs', () => {
         }
       },
       render() {
-        return h('div', { ref: refKey.value })
+        return h('div', { ref: [this, refKey.value] as any })
       }
     }
     render(h(Comp), root)
@@ -60,7 +70,7 @@ describe('api: template refs', () => {
         }
       },
       render() {
-        return toggle.value ? h('div', { ref: 'refKey' }) : null
+        return toggle.value ? h('div', { ref: [this, 'refKey'] as any }) : null
       }
     }
     render(h(Comp), root)
@@ -69,6 +79,50 @@ describe('api: template refs', () => {
     toggle.value = false
     await nextTick()
     expect(el.value).toBe(null)
+  })
+
+  it('function ref mount', () => {
+    const root = nodeOps.createElement('div')
+    const fn = jest.fn()
+
+    const Comp = defineComponent(() => () => h('div', { ref: fn }))
+    render(h(Comp), root)
+    expect(fn.mock.calls[0][0]).toBe(root.children[0])
+  })
+
+  it('function ref update', async () => {
+    const root = nodeOps.createElement('div')
+    const fn1 = jest.fn()
+    const fn2 = jest.fn()
+    const fn = ref(fn1)
+
+    const Comp = defineComponent(() => () => h('div', { ref: fn.value }))
+
+    render(h(Comp), root)
+    expect(fn1.mock.calls).toHaveLength(1)
+    expect(fn1.mock.calls[0][0]).toBe(root.children[0])
+    expect(fn2.mock.calls).toHaveLength(0)
+
+    fn.value = fn2
+    await nextTick()
+    expect(fn1.mock.calls).toHaveLength(1)
+    expect(fn2.mock.calls).toHaveLength(1)
+    expect(fn2.mock.calls[0][0]).toBe(root.children[0])
+  })
+
+  it('function ref unmount', async () => {
+    const root = nodeOps.createElement('div')
+    const fn = jest.fn()
+    const toggle = ref(true)
+
+    const Comp = defineComponent(() => () =>
+      toggle.value ? h('div', { ref: fn }) : null
+    )
+    render(h(Comp), root)
+    expect(fn.mock.calls[0][0]).toBe(root.children[0])
+    toggle.value = false
+    await nextTick()
+    expect(fn.mock.calls[1][0]).toBe(null)
   })
 
   it('render function ref mount', () => {
@@ -90,7 +144,7 @@ describe('api: template refs', () => {
       foo: ref(null),
       bar: ref(null)
     }
-    const refKey: Ref<keyof typeof refs> = ref('foo')
+    const refKey = ref('foo') as Ref<keyof typeof refs>
 
     const Comp = {
       setup() {
